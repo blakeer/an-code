@@ -1,0 +1,8 @@
+---
+- hosts: 93
+  gather_facts: false
+  
+  tasks:
+    - name: change hostname
+      hostname:
+        name: bdy-ctos6
