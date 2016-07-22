@@ -1,0 +1,2 @@
+
+command: chdir=/tmp/memcache make install
