@@ -6,3 +6,232 @@
     - name: change hostname
       hostname:
         name: bdy-ctos6
+---
+- hosts: "{{ hosts }}"
+
+  vars_files:
+    - redis/vars_files/vars_{{ vars_files }}.yml
+  roles:
+    - role: redis
+main.yml
+- include: redisinstall.yml
+- include: redistart.yml
+
+redisinstall.yml
+- name: create path data
+  file:
+    path: /data/redis
+    state: directory
+  tags:
+    - install_redis+add_port
+
+- name: create path log
+  file:
+    path: /data/log
+    state: directory
+  tags:
+    - install_redis+add_port
+
+- name: copy redis file
+  unarchive:
+    src: "{{ redis }}.tar.gz"
+    dest: /usr/local/
+  tags:
+    - install_redis+add_port
+ 
+- name: link redis file
+  file:
+    src: "/usr/local/{{ redis }}"
+    dest: "/data/{{ redis }}"
+    force: yes
+    state: link
+  tags:
+    - install_redis+add_port
+
+- name: copy command
+  copy:
+    src: "{{ redis }}-{{ item }}"
+    dest: /usr/local/bin/{{ item }}
+    mode: 0755
+  with_items:
+    - redis-benchmark
+    - redis-check-aof
+    - redis-check-dump
+    - redis-cli
+    - redis-server
+  tags:
+    - install_redis+add_port
+
+- name: link redis-sentinel
+  file:
+    src: redis-server
+    dest: /usr/local/bin/redis-sentinel
+    state: link
+  tags:
+    - install_redis+add_port
+
+- name: "create path /data/nosql/redis/{{ port }}"
+  file:
+    path: /data/nosql/redis/{{ port }}
+    state: directory
+  tags:
+    - install_redis+add_port
+    - add_port
+
+- name: create path /etc/redis
+  file: 
+    path: /etc/redis
+    state: directory
+  tags:
+    - install_redis+add_port
+
+- name: copy conf
+  template:
+    src: redis.conf.j2
+    dest: /etc/redis/{{ port }}.conf
+  tags:
+    - install_redis+add_port
+    - add_port
+
+- name: "copy /etc/init.d/redis_{{ port }}"
+  template:
+    src: redis_init_script.j2
+    dest: /etc/init.d/redis_{{ port }}
+    mode: 0755
+  tags:
+    - install_redis+add_port
+    - add_port
+
+redistart.yml
+- name: "start redis_{{ port }}"
+  service:
+    name: redis_{{ port }}
+    state: started
+  tags:
+    - install_redis+add_port
+    - add_port
+
+[root@cc-ansible-219 files]# ll
+total 53416
+-rwxr-xr-x. 1 root root  4170320 Oct 25 10:53 redis-2.8.9-redis-benchmark
+-rwxr-xr-x. 1 root root    22217 Oct 25 10:53 redis-2.8.9-redis-check-aof
+-rwxr-xr-x. 1 root root    45459 Oct 25 10:53 redis-2.8.9-redis-check-dump
+-rwxr-xr-x. 1 root root  4263511 Oct 25 10:53 redis-2.8.9-redis-cli
+-rwxr-xr-x. 1 root root  5726847 Oct 25 10:53 redis-2.8.9-redis-server
+-rw-r--r--. 1 root root 11678074 Oct 25 10:53 redis-2.8.9.tar.gz
+-rwxr-xr-x. 1 root root  4587379 Oct 25 10:53 redis-3.0.5-redis-benchmark
+-rwxr-xr-x. 1 root root    22217 Oct 25 10:53 redis-3.0.5-redis-check-aof
+-rwxr-xr-x. 1 root root    45435 Oct 25 10:53 redis-3.0.5-redis-check-dump
+-rwxr-xr-x. 1 root root  4691530 Oct 25 10:53 redis-3.0.5-redis-cli
+-rwxr-xr-x. 1 root root  6464869 Oct 25 10:53 redis-3.0.5-redis-server
+-rw-r--r--. 1 root root 12950058 Oct 25 10:53 redis-3.0.5.tar.gz
+
+redis.conf.j2 
+daemonize yes
+logfile /data/log/redis_{{ port }}.log
+pidfile /tmp/redis_{{ port }}.pid
+port {{ port }}
+bind {{ ansible_eth0.ipv4.address }}
+timeout 0
+tcp-keepalive 0
+loglevel notice
+databases 16
+{{ save }}save 900 1
+{{ save }}save 300 10
+{{ save }}save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump_{{ port }}.rdb
+dir /data/nosql/redis/{{ port }}
+#slave-serve-stale-data yes
+#slave-read-only yes
+repl-disable-tcp-nodelay no
+slave-priority 100
+requirepass {{ requirepass }}
+maxmemory {{ maxmemory }}
+appendonly no
+appendfilename "appendonly-{{ port }}.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+lua-time-limit 5000
+slowlog-log-slower-than 10000
+slowlog-max-len 128
+notify-keyspace-events ""
+hash-max-ziplist-entries 512
+hash-max-ziplist-value 64
+list-max-ziplist-entries 512
+list-max-ziplist-value 64
+set-max-intset-entries 512
+zset-max-ziplist-entries 128
+zset-max-ziplist-value 64
+activerehashing yes
+client-output-buffer-limit normal 0 0 0
+client-output-buffer-limit slave 256mb 64mb 60
+client-output-buffer-limit pubsub 32mb 8mb 60
+hz 10
+aof-rewrite-incremental-fsync yes
+
+redis_init_script.j2 
+#!/bin/sh
+#
+# Simple Redis init.d script conceived to work on Linux systems
+# as it does use of the /proc filesystem.
+
+REDISPORT={{ port }}
+EXEC=/usr/local/bin/redis-server
+CLIEXEC=/usr/local/bin/redis-cli
+
+PIDFILE=/var/run/redis_${REDISPORT}.pid
+CONF="/etc/redis/${REDISPORT}.conf"
+
+case "$1" in
+    start)
+        if [ -f $PIDFILE ]
+        then
+                echo "$PIDFILE exists, process is already running or crashed"
+        else
+                echo "Starting Redis server..."
+                $EXEC $CONF
+        fi
+        ;;
+    stop)
+        if [ ! -f $PIDFILE ]
+        then
+                echo "$PIDFILE does not exist, process is not running"
+        else
+                PID=$(cat $PIDFILE)
+                echo "Stopping ..."
+                $CLIEXEC -p $REDISPORT shutdown
+                while [ -x /proc/${PID} ]
+                do
+                    echo "Waiting for Redis to shutdown ..."
+                    sleep 1
+                done
+                echo "Redis stopped"
+        fi
+        ;;
+    *)
+        echo "Please use start or stop as first argument"
+        ;;
+esac 
+
+vars_no.yml 
+save: "#"
+
+vars_yes.yml 
+save:
+
+
+
+
+
+
+
+
+
+
+
+
